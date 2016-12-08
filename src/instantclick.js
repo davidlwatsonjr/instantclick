@@ -11,13 +11,9 @@ var instantClick
     , $touchEndedWithoutClickTimer
 
   // Preloading-related variables
-    , $history = {}
+    , $history = []
     , $xhr
     , $url = false
-    , $title = false
-    , $isContentTypeNotHTML
-    , $areTrackedAssetsDifferent
-    , $body = false
     , $lastDisplayTimestamp = 0
     , $isPreloading = false
     , $isWaitingForCompletion = false
@@ -438,10 +434,12 @@ var instantClick
   }
 
   function readystatechangeListener() {
+    var urlWithoutHash = removeHash($url)
+
     if ($xhr.readyState == 2) { // headers received
       var contentType = $xhr.getResponseHeader('Content-Type')
       if (!contentType || !/^text\/html/i.test(contentType)) {
-        $isContentTypeNotHTML = true
+        $history[urlWithoutHash].isContentTypeNotHTML = true
       }
     }
 
@@ -451,7 +449,7 @@ var instantClick
 
     if ($xhr.status == 0) {
       /* Request error/timeout/abort */
-      $gotANetworkError = true
+      $history[urlWithoutHash].gotANetworkError = true
       if ($isWaitingForCompletion) {
         triggerPageEvent('exit', $url, 'network error')
         location.href = $url
@@ -459,7 +457,7 @@ var instantClick
       return
     }
 
-    if ($isContentTypeNotHTML) {
+    if ($history[urlWithoutHash].isContentTypeNotHTML) {
       if ($isWaitingForCompletion) {
         triggerPageEvent('exit', $url, 'non-html content-type')
         location.href = $url
@@ -469,24 +467,15 @@ var instantClick
 
     var doc = document.implementation.createHTMLDocument('')
     doc.documentElement.innerHTML = removeNoscriptTags($xhr.responseText)
-    $title = doc.title
-    $body = doc.body
 
-    var alteredOnReceive = triggerPageEvent('receive', $url, $body, $title)
+    var alteredOnReceive = triggerPageEvent('receive', $url, doc.body, doc.title)
     if (alteredOnReceive) {
       if ('body' in alteredOnReceive) {
-        $body = alteredOnReceive.body
+        doc.body = alteredOnReceive.body
       }
       if ('title' in alteredOnReceive) {
-        $title = alteredOnReceive.title
+        doc.title = alteredOnReceive.title
       }
-    }
-
-    var urlWithoutHash = removeHash($url)
-    $history[urlWithoutHash] = {
-      body: $body,
-      title: $title,
-      scrollPosition: urlWithoutHash in $history ? $history[urlWithoutHash].scrollPosition : 0
     }
 
     var elements = doc.head.children
@@ -506,8 +495,12 @@ var instantClick
         }
       }
     }
+
+    $history[urlWithoutHash].body = doc.body
+    $history[urlWithoutHash].title = doc.title
+
     if (found != $trackedAssets.length) {
-      $areTrackedAssetsDifferent = true
+      $history[urlWithoutHash].areTrackedAssetsDifferent = true
     }
 
     if ($isWaitingForCompletion) {
@@ -587,11 +580,19 @@ var instantClick
     $isPreloading = true
     $isWaitingForCompletion = false
 
+    var urlWithoutHash = removeHash(url)
+    if ($history[urlWithoutHash]) {
+      return
+    }
+
+    $history[urlWithoutHash] = {
+      body: false,
+      isContentTypeNotHTML: false,
+      gotANetworkError: false,
+      areTrackedAssetsDifferent: false,
+      scrollPosition: 0
+    }
     $url = url
-    $body = false
-    $isContentTypeNotHTML = false
-    $gotANetworkError = false
-    $areTrackedAssetsDifferent = false
     triggerPageEvent('preload')
     $xhr.open('GET', url)
     $xhr.timeout = 90000 // Must be set after `open()` with IE
@@ -645,29 +646,36 @@ var instantClick
       location.href = url
       return
     }
-    if ($isContentTypeNotHTML) {
+    var preloadedPage = $history[removeHash(url)]
+    if (!preloadedPage) {
+      /* The user clicked on a link that was not preloaded and is not being preloaded. */
+      triggerPageEvent('exit', $url, 'clicked on a link that is not preloaded')
+      location.href = $url
+      return
+    }
+    if (preloadedPage.isContentTypeNotHTML) {
       triggerPageEvent('exit', $url, 'non-html content-type')
       location.href = $url
       return
     }
-    if ($gotANetworkError) {
+    if (preloadedPage.gotANetworkError) {
       triggerPageEvent('exit', $url, 'network error')
       location.href = $url
       return
     }
-    if ($areTrackedAssetsDifferent) {
+    if (preloadedPage.areTrackedAssetsDifferent) {
       triggerPageEvent('exit', $url, 'different assets')
       location.href = $url
       return
     }
-    if (!$body) {
+    if (!preloadedPage.body) {
       triggerPageEvent('wait')
       $isWaitingForCompletion = true
       return
     }
     $history[$currentLocationWithoutHash].scrollPosition = pageYOffset
     setPreloadingAsHalted()
-    changePage($title, $body, $url)
+    changePage(preloadedPage.title, preloadedPage.body, $url)
   }
 
 
